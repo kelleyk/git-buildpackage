@@ -20,8 +20,10 @@ from gbp.pkg import compressor_opts
 from gbp.pkg.pristinetar import PristineTar
 from gbp.deb import DebianPkgPolicy
 
+
 class DebianPristineTar(PristineTar):
     """The pristine-tar branch in a Debian git repository"""
+    
     def has_commit(self, package, version, comp_type=None):
         """
         Do we have a pristine-tar commit for package I{package} at version
@@ -34,13 +36,11 @@ class DebianPristineTar(PristineTar):
         @param comp_type: the compression type
         @type comp_type: C{str}
         """
-        if not comp_type:
-            ext = '\w\+'
-        else:
-            ext = compressor_opts[comp_type][1]
 
-        name_regexp = '%s_%s\.orig\.tar\.%s' % (package, version, ext)
-
+        # name_regexp = '%s_%s\.orig\.tar\.%s' % (package, version, ext)
+        
+        name_regexp = DebianPkgPolicy.build_tarball_name_pattern(
+            package, version, comp_type)
         return super(DebianPristineTar, self).has_commit(name_regexp)
 
     def checkout(self, package, version, comp_type, output_dir):
@@ -57,9 +57,7 @@ class DebianPristineTar(PristineTar):
         @param output_dir: the directory to put the tarball into
         @type output_dir: C{str}
         """
-        name = DebianPkgPolicy.build_tarball_name(package,
-                                                  version,
-                                                  comp_type,
-                                                  output_dir)
+        
+        name = DebianPkgPolicy.build_tarball_name(
+            package, version, comp_type, output_dir)
         super(DebianPristineTar, self).checkout(name)
-

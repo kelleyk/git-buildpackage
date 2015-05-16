@@ -64,7 +64,9 @@ class DebianSource(object):
         """
         try:
             ff = self._vfs.open('debian/source/format')
-            f = DebianSourceFormat(ff.read())
+            ff_data = ff.read()
+            # print(ff_data)
+            f = DebianSourceFormat(ff_data)
             if f.type:
                 return f.type == 'native'
         except IOError as e:
@@ -83,7 +85,9 @@ class DebianSource(object):
         if not self._changelog:
             try:
                 clf = self._vfs.open('debian/changelog')
-                self._changelog = ChangeLog(clf.read())
+                clf_data = clf.read()
+                # print(clf_data)
+                self._changelog = ChangeLog(clf_data)
             except IOError as err:
                 raise DebianSourceError('Failed to read changelog: %s' % err)
         return self._changelog

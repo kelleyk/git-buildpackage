@@ -20,6 +20,9 @@
 from six.moves import configparser
 import errno
 import os, os.path
+import os
+import os.path
+import re
 import shutil
 import sys
 import time
@@ -81,11 +84,15 @@ def prepare_upstream_tarball(repo, cp, options, tarball_dir, output_dir):
     Make sure we have an upstream tarball. This involves loooking in
     tarball_dir, symlinking or building it.
     """
+    gbp.log.debug('prepare_upstream_tarball()')
+    
     options.comp_type = guess_comp_type(repo,
                                         options.comp_type,
                                         cp,
                                         options.tarball_dir)
     orig_file = du.orig_file(cp, options.comp_type)
+
+    gbp.log.debug('prepare_upstream_tarball(); orig_file={!r}'.format(orig_file))
 
     # look in tarball_dir first, if found force a symlink to it
     if options.tarball_dir:
@@ -94,20 +101,35 @@ def prepare_upstream_tarball(repo, cp, options, tarball_dir, output_dir):
             gbp.log.info("Orig tarball '%s' not found at '%s'" % (orig_file, tarball_dir))
         else:
             gbp.log.info("Orig tarball '%s' found at '%s'" % (orig_file, tarball_dir))
+            
     # build an orig unless the user forbids it, always build (and overwrite pre-existing) if user forces it
-    if options.force_create or (not options.no_create_orig and not du.DebianPkgPolicy.has_orig(orig_file, output_dir)):
+    has_orig = du.DebianPkgPolicy.has_orig(orig_file, output_dir)
+    gbp.log.info('force_create: {}  no_create_orig: {}  has_orig: {}'.format(options.force_create, options.no_create_orig, has_orig))
+    if options.force_create or (not options.no_create_orig and not has_orig):
+        # Tarball doesn't exist, or the user has forced us to create one anyhow.
+        gbp.log.info('Creating orig tarball...')
+        
         if not pristine_tar_build_orig(repo, cp, output_dir, options):
+            # We weren't able to get a tarball from pristine-tar.
+
+            # @KK: This function now does a bunch of nice checking for snapshot builds (e.g. that
+            # the version number is appropriate, that the commit it references is on the
+            # --upstream-branch, and so on).  For the time being, use --force-create to get those
+            # nice extras.  (Probably always a decent idea, though.)
             upstream_tree = git_archive_build_orig(repo, cp, output_dir, options)
+
             if options.pristine_tar_commit:
                 if repo.pristine_tar.has_commit(cp.name,
                                                 cp.upstream_version,
                                                 options.comp_type):
+                    raise AssertionError('If we already had a commit, then pristine_tar_build_orig() should have '
+                                         'returned True.  What is going on?')
                     gbp.log.debug("%s already on pristine tar branch" %
                                   orig_file)
                 else:
                     archive = os.path.join(output_dir, orig_file)
-                    gbp.log.debug("Adding %s to pristine-tar branch" %
-                                  archive)
+                    gbp.log.debug("Adding %s to pristine-tar branch" % archive)
+                    # import pdb; pdb.set_trace()
                     repo.pristine_tar.commit(archive, upstream_tree)
 
 
@@ -203,8 +225,10 @@ def source_vfs(repo, options, tree):
     # FIXME: just init the correct vfs
     try:
         if tree:
+            gbp.log.debug('source_vfs returning DebianSource(GitVfs(repo=%s, tree=%s))' % (repo, tree))
             source = DebianSource(GitVfs(repo, tree))
         else:
+            gbp.log.debug('source_vfs returning DebianSource(\'.\') with cwd = %s' % (os.getcwd(),))
             source = DebianSource('.')
             source.is_native() # check early if this works
     except Exception as e:
@@ -226,46 +250,118 @@ def prepare_output_dir(dir):
             raise GbpError("Cannot create output dir %s" % output_dir)
     return output_dir
 
+
 def pristine_tar_build_orig(repo, cp, output_dir, options):
-    """
-    build orig using pristine-tar
+    """Use pristine-tar to recreate an upstream ("orig") tarball.
+
+    Returns True iff the tarball was checked out without incident.  Returns False iff the tarball
+    could not be checked out (presumably because it doesn't exist; check `pristine-tar list`) but
+    the --git-pristine-tar-commit option has been specified.  Raises a fatal error if that option
+    has not been specified.
+
     @return: True: orig tarball build, False: noop
+
     """
+
     if options.pristine_tar:
+        
+        # @KK: has_branch() might be better called has_ref(); it checks that 'git show-ref' succeeds.
         if not repo.has_branch(repo.pristine_tar_branch):
-            gbp.log.warn('Pristine-tar branch "%s" not found' %
-                         repo.pristine_tar.branch)
+            # gbp.log.warn('Pristine-tar branch "%s" not found' %
+            #              repo.pristine_tar.branch)
+            # @KK: Do we want to leave this as a warning?  Also, should we try creating the local
+            # pristine-tar branch for the user?
+            if repo.has_branch('origin/pristine-tar', remote=True):  # checks for refs/remote/origin/pristine-tar
+                raise GbpError('No pristine-tar branch.  (However, the "origin" remote seems to have one; '
+                               'maybe you just forgot to create a local branch with `git checkout pristine-tar`?)')
+            else:
+                raise GbpError('No pristine-tar branch.')
+                
         try:
-            repo.pristine_tar.checkout(cp.name,
-                                       cp.upstream_version,
-                                       options.comp_type,
-                                       output_dir)
-            return True
+            repo.pristine_tar.checkout(
+                cp.name, cp.upstream_version, options.comp_type, output_dir)
+
         except CommandExecFailed:
             if options.pristine_tar_commit:
-                gbp.log.debug("pristine-tar checkout failed, "
-                              "will commit tarball due to "
-                              "'--pristine-tar-commit'")
+                # @KK: This is actually *normal* in the case where you want gbp to handle pristine-tar for you.
+                gbp.log.debug("pristine-tar checkout failed (presumably because an appropriate tarball isn't "
+                              "present); but you gave --pristine-tar-commit, so I'm going to commit one for you.")
+                return False
             else:
                 raise
-    return False
+            
+        return True
 
 
+# @KK: Modified version of gbp/scripts/dch.py:snapshot_version() that does not discard 'commit'.
+def parse_snapshot_version(version):
+    try:
+        release, suffix = version.rsplit('~', 1)
+        m = re.match(r'^(\d+)\.gbp([0-9a-f]{5,})$', suffix)
+        if not m:
+            gbp.log.debug('Last part of upstream version does not seem to be in gbp '
+                          'snapshot format: {!r}'.format(suffix))
+            raise ValueError()
+        snapshot = int(m.group(1))
+        commit = m.group(2)
+        
+    except ValueError:
+        # Not a snapshot release.
+        release = version
+        snapshot = 0
+        commit = None
+        
+    return release, snapshot, commit
+
+    
 def get_upstream_tree(repo, cp, options):
     """Determine the upstream tree from the given options"""
+    
     if options.upstream_tree.upper() == 'TAG':
+
         if cp['Upstream-Version'] is None:
             raise GitRepositoryError("Can't determine upstream version from changelog")
-        upstream_tree = repo.version_to_tag(options.upstream_tag,
-                                            cp['Upstream-Version'])
+
+        # XXX: @KK: Should we look for the '@SNAPSHOT:' line in the changelog comments instead of
+        # this business with the version?  Looking at gbp/scripts/dch.py, they do it both ways.
+        # (Why?)
+        
+        # XXX: TODO: @KK: Should break this out to an 'AUTO' option.        
+        release, snapshot, commit = parse_snapshot_version(cp['Upstream-Version'])
+        if commit is not None:
+            gbp.log.info('Treating upstream version {!r} as a snapshot of presumably-upstream commit {}.'.format(
+                cp['Upstream-Version'], commit))
+            
+            # XXX: TODO: Check that 'commit' is, actually, on our upstream branch; I can see this being a gotcha.
+            branches = repo.get_branches_containing_commit(commit)
+            if options.upstream_branch not in branches:
+                
+                try:
+                    merge_base = repo.get_merge_base(options.upstream_branch, commit)
+                    merge_base_msg = '  The merge-base (most-recent common ancestor) of that that commit and the upstream branch is {}; should you be using that, instead?'.format(merge_base[:6])
+                except GitRepositoryError:
+                    merge_base_msg = ''
+                    
+                raise GbpError('Upstream version {!r} seems like a snapshot of commit {}, but '
+                               'the --upstream-branch ({!r}) does not contain that commit.'.format(
+                                   cp['Upstream-Version'], commit, options.upstream_branch) + merge_base_msg)
+            
+            upstream_tree = commit  # should be a short commit SHA, which will be a valid treeish
+
+        else:
+            # @KK: (the previous behavior)
+            upstream_tree = repo.version_to_tag(options.upstream_tag,
+                                                cp['Upstream-Version'])
     elif options.upstream_tree.upper() == 'BRANCH':
         if not repo.has_branch(options.upstream_branch):
             raise GbpError("%s is not a valid branch" % options.upstream_branch)
         upstream_tree = options.upstream_branch
     else:
         upstream_tree = options.upstream_tree
+        
     if not repo.has_treeish(upstream_tree):
         raise GbpError("%s is not a valid treeish" % upstream_tree)
+    # import pdb; pdb.set_trace()
     return upstream_tree
 
 
@@ -282,16 +378,14 @@ def git_archive_build_orig(repo, cp, output_dir, options):
     @return: the tree we built the tarball from
     @rtype: C{str}
     """
+    
     upstream_tree = get_upstream_tree(repo, cp, options)
-    gbp.log.info("%s does not exist, creating from '%s'" % (du.orig_file(cp,
-                                                            options.comp_type),
-                                                            upstream_tree))
+    gbp.log.info("%s does not exist, creating from '%s'" % (du.orig_file(cp, options.comp_type), upstream_tree))
     gbp.log.debug("Building upstream tarball with compression '%s -%s'" %
                   (options.comp_type, options.comp_level))
-    if not git_archive(repo, cp, output_dir, upstream_tree,
-                       options.comp_type,
-                       options.comp_level,
-                       options.with_submodules):
+    if not git_archive(
+            repo, cp, output_dir, upstream_tree,
+            options.comp_type, options.comp_level, options.with_submodules):
         raise GbpError("Cannot create upstream tarball at '%s'" % output_dir)
     return upstream_tree
 
@@ -529,7 +623,7 @@ def parse_args(argv, prefix):
 
     # --git-dont-purge is deprecated:
     if options.dont_purge:
-        gbp.log.warning("--git-dont-purge is depreceted, use --git-no-purge instead")
+        gbp.log.warning("--git-dont-purge is deprecated, use --git-no-purge instead")
         options.purge = False
 
     return options, args, dpkg_args
@@ -597,26 +691,53 @@ def main(argv):
             # sources and create different tarballs (#640382)
             # We don't delay it in general since we want to fail early if the
             # tarball is missing.
-            if not source.is_native():
+            is_native = source.is_native()
+            gbp.log.debug('Is the package Debian-native? %s' % (is_native,))
+            if not is_native:
                 if options.postexport:
                     gbp.log.info("Postexport hook set, delaying tarball creation")
                 else:
+                    gbp.log.info('Preparing upstream tarball (not delayed)...')
                     prepare_upstream_tarball(repo, source.changelog, options, tarball_dir,
                                              output_dir)
 
             # Export to another build dir if requested:
             if options.export_dir:
-                tmp_dir = os.path.join(output_dir, "%s-tmp" % source.sourcepkg)
+                gbp.log.debug('export_dir is set...')
+                sourcepkg = source.sourcepkg
+                assert sourcepkg is not None
+                gbp.log.debug('sourcepkg = %s' % (sourcepkg,))
+                tmp_dir = os.path.join(output_dir, "%s-tmp" % sourcepkg)
                 export_source(repo, tree, source, options, tmp_dir, output_dir)
 
+                # XXX: @KK:
+                gbp.log.debug('Changing source to use tmp_dir=%s' % (tmp_dir,))
+                source = DebianSource(tmp_dir)
+                
                 # Run postexport hook
+                gbp.log.debug('running post-export hook...') 
                 if options.postexport:
                     Hook('Postexport', options.postexport, shell=True,
                          extra_env={'GBP_GIT_DIR': repo.git_dir,
                                     'GBP_TMP_DIR': tmp_dir})(dir=tmp_dir)
 
+                    # @KK: This is unnecessary because we are creating a new DebianSource object above now, anyhow.
+                    assert source._changelog is None
+                    # # XXX: Using source.sourcepkg causes debian/changelog to be parsed (and then
+                    # # cached); but we want our post-export hook to be able to change it!
+                    # source._changelog = None
+
+                if source.changelog.upstream_version is None and not source.is_native():
+                    raise GbpError('This package is not Debian-native (according to debian/source/format), but the '
+                                   'last version number in debian/changelog does not seem to contain a dash (-) to  '
+                                   'separate the Debian version from the upstream version.  (The raw version string '
+                                   'is {!r}.)'.format(source.changelog.version))
+                    
                 major = (source.changelog.debian_version if source.is_native()
                          else source.changelog.upstream_version)
+                if major is None:
+                    raise GbpError('Cannot determine upstream version from changelog.')
+                
                 export_dir = os.path.join(output_dir, "%s-%s" % (source.sourcepkg, major))
                 gbp.log.info("Moving '%s' to '%s'" % (tmp_dir, export_dir))
                 move_old_export(export_dir)
@@ -624,6 +745,7 @@ def main(argv):
 
                 # Delayed tarball creation in case a postexport hook is used:
                 if not source.is_native() and options.postexport:
+                    gbp.log.debug('Preparing upstream tarball (delayed)...')
                     prepare_upstream_tarball(repo, source.changelog, options, tarball_dir,
                                              output_dir)
 

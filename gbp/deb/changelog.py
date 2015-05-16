@@ -114,6 +114,11 @@ class ChangeLog(object):
         except TypeError:
             raise ParseChangeLogError(output.split('\n')[0])
 
+        import gbp
+        gbp.log.debug('Result of parsing version information from debian/changelog:')
+        for key in ('Version', 'Epoch', 'NoEpoch-Version', 'Upstream-Version', 'Debian-Version'):
+            gbp.log.debug('    {}: {!r}'.format(key, cp.get(key)))
+        
         self._cp = cp
 
     def _read(self):

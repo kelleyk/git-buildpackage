@@ -173,7 +173,7 @@ class GitRepository(object):
         stderr_arg = subprocess.PIPE if capture_stderr else None
         stdin_arg = subprocess.PIPE if input else None
 
-        log.debug(cmd)
+        log.debug('{} (cwd={})'.format(cmd, cwd))
         popen = subprocess.Popen(cmd,
                                  stdin=stdin_arg,
                                  stdout=subprocess.PIPE,
@@ -285,7 +285,10 @@ class GitRepository(object):
         """SHA1 of the current HEAD"""
         return self.rev_parse('HEAD')
 
-#{ Branches and Merging
+    ###############################
+    # Branches and Merging
+    ###############################
+
     def rename_branch(self, branch, newbranch):
         """
         Rename branch
@@ -354,6 +357,27 @@ class GitRepository(object):
             branch = None  # empty repo
         return branch
 
+    def get_branches_containing_commit(self, sha):
+        """
+        Returns a list of the names of those local branches that contain the given commit.
+        """
+        
+        stdout, retval = self._git_getoutput('branch', ['--contains', sha])
+        if retval == 129:
+            return []
+        if retval:
+            raise GitRepositoryError()
+        return [s.strip('\n *') for s in stdout]
+
+    def get_merge_base(self, treeish_a, treeish_b):
+        """
+        Returns the most-recent common ancestor of two branches (or a branch and a commit, etc.)
+        """
+
+        stdout, retval = self._git_getoutput('merge-base', [treeish_a, treeish_b])
+        if retval:
+            raise GitRepositoryError()
+        return stdout.strip()
 
     def has_branch(self, branch, remote=False):
         """

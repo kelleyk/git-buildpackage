@@ -88,3 +88,11 @@ class DebianPkgPolicy(PkgPolicy):
         if dir:
             tarball = os.path.join(dir, tarball)
         return tarball
+
+    @staticmethod
+    def build_tarball_name_pattern(name, version, compression=None, dir=None):
+        ext = r'\w+' if compression is None else re.escape(compressor_opts[compression][1])
+        tarball = r'{}_{}\.orig\.tar\.{}'.format(re.escape(name), re.escape(version), ext)
+        if dir:
+            tarball = os.path.join(dir, tarball)
+        return tarball
