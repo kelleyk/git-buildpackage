@@ -119,7 +119,7 @@ def snapshot_version(version):
     try:
         (release, suffix) = version.rsplit('~', 1)
         (snapshot, commit)  = suffix.split('.', 1)
-        if not commit.startswith('gbp'):
+        if not (commit.startswith('gbp') or commit.startswith('git')):
             raise ValueError
         else:
             snapshot = int(snapshot)
@@ -187,7 +187,8 @@ def do_snapshot(changelog, repo, next_snapshot):
     (release, snapshot) = snapshot_version(cp['Version'])
     snapshot = int(eval(next_snapshot))
 
-    suffix = "%d.gbp%s" % (snapshot, "".join(commit[0:6]))
+    # @KK: Changed this from 'gbp' to 'git'.  Make it configurable?
+    suffix = "%d.git%s" % (snapshot, "".join(commit[0:6]))
     cp['MangledVersion'] = "%s~%s" % (release, suffix)
 
     mangle_changelog(changelog, cp, commit)

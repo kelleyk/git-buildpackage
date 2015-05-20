@@ -297,7 +297,7 @@ def pristine_tar_build_orig(repo, cp, output_dir, options):
 def parse_snapshot_version(version):
     try:
         release, suffix = version.rsplit('~', 1)
-        m = re.match(r'^(\d+)\.gbp([0-9a-f]{5,})$', suffix)
+        m = re.match(r'^(\d+)\.(?:gbp|git)([0-9a-f]{5,})$', suffix)
         if not m:
             gbp.log.debug('Last part of upstream version does not seem to be in gbp '
                           'snapshot format: {!r}'.format(suffix))
