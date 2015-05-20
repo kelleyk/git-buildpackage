@@ -151,15 +151,20 @@ def apply_debian_patch(repo, unpack_dir, src, options, tag):
                                 tag)
 
         author = get_author_from_changelog(unpack_dir)
+        gbp.log.debug('Author: %s <%s>' % (author.name, author.email))
         committer = get_committer_from_author(author, options)
+        gbp.log.debug('Committer: %s <%s>' % (committer.name, committer.email))
         commit = repo.commit_dir(unpack_dir,
                                  "Imported Debian patch %s" % src.version,
                                  branch = options.debian_branch,
                                  other_parents = parents,
                                  author=author,
                                  committer=committer)
+        gbp.log.debug('Committed as %s' % commit)
         if not options.skip_debian_tag:
-            repo.create_tag(repo.version_to_tag(options.debian_tag, src.version),
+            tag_name = repo.version_to_tag(options.debian_tag, src.version)
+            gbp.log.debug('Going to tag this commit as %s' % tag_name)
+            repo.create_tag(tag_name,
                             msg="Debian release %s" % src.version,
                             commit=commit,
                             sign=options.sign_tags,
