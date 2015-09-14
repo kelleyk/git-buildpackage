@@ -41,23 +41,65 @@ class SkipImport(Exception):
     pass
 
 
-def download_source(pkg, dirs, unauth):
-    opts = [ '--download-only' ]
-    if unauth:
-        opts.append('--allow-unauthenticated')
+# def download_source(pkg, dirs, unauth):
+#     opts = [ '--download-only' ]
+#     if unauth:
+#         opts.append('--allow-unauthenticated')
+
+#     if re.match(r'[a-z]{1,5}://', pkg):
+#         cmd = 'dget'
+#         opts += ['-q', pkg]
+#     else:
+#         cmd = 'apt-get'
+#         opts += ['-qq', 'source', pkg]
+
+#     dirs['download'] = os.path.abspath(tempfile.mkdtemp())
+#     gbp.log.info("Downloading '%s' using '%s'..." % (pkg, cmd))
+
+#     gbpc.RunAtCommand(cmd, opts, shell=False)(dir=dirs['download'])
+#     dsc = glob.glob(os.path.join(dirs['download'], '*.dsc'))[0]
+#     return dsc
+
+
+def download_source(pkg, dirs, unauth, no_default_keyrings=False, keyrings=None):
 
     if re.match(r'[a-z]{1,5}://', pkg):
+        # Use dget to download a source package from a user-supplied URL.
         cmd = 'dget'
-        opts += ['-q', pkg]
+        opts = ['--download-only', '--allow-unauthenticated', '-q', pkg]
+        
     else:
+        # Use apt-get to download a source package from one of the system's package repositories.
         cmd = 'apt-get'
+        opts = ['--download-only']
+        if unauth:
+            opts.append('--allow-unauthenticated')
         opts += ['-qq', 'source', pkg]
 
     dirs['download'] = os.path.abspath(tempfile.mkdtemp())
     gbp.log.info("Downloading '%s' using '%s'..." % (pkg, cmd))
-
+    
     gbpc.RunAtCommand(cmd, opts, shell=False)(dir=dirs['download'])
     dsc = glob.glob(os.path.join(dirs['download'], '*.dsc'))[0]
+
+    if cmd == 'dget' and not unauth:
+        gbp.log.info("Verifying package using 'dscverify''...")
+
+        opts = []
+        if no_default_keyrings:
+            opts.append('--no-default-keyrings')
+        for keyring_path in (keyrings or ()):
+            opts.append('--keyring={}'.format(keyring_path))
+        # (or) the env var DSCVERIFY_KEYRINGS may be a colon-separated list of them.
+        
+        opts += [dsc]
+        try:
+            gbpc.RunAtCommand('dscverify', opts, shell=False)(dir=dirs['download'])
+        except gbpc.CommandExecFailed as exc:
+            # TODO: Verification failed; handle this better?
+            raise
+        
+    
     return dsc
 
 
@@ -223,6 +265,7 @@ def build_parser(name):
                       "options related to git tag creation")
     branch_group = GbpOptionGroup(parser, "version and branch naming options",
                       "version number and branch layout options")
+    verify_group = GbpOptionGroup(parser, "package verification options")
 
     for group in [import_group, branch_group, tag_group ]:
         parser.add_option_group(group)
@@ -265,8 +308,15 @@ def build_parser(name):
                       dest="author_committer")
     import_group.add_boolean_config_file_option(option_name="author-date-is-committer-date",
                       dest="author_committer_date")
-    import_group.add_boolean_config_file_option(option_name="allow-unauthenticated",
+    
+    verify_group.add_boolean_config_file_option(option_name="allow-unauthenticated",
                       dest="allow_unauthenticated")
+    verify_group.add_boolean_config_file_option(option_name='no-default-keyrings',
+                                                dest='no_default_keyrings')
+    verify_group.add_config_file_option(option_name='keyring',
+                                        dest='keyring',
+                                        action='append')
+    
     return parser
 
 
@@ -299,7 +349,9 @@ def main(argv):
             if options.download:
                 dsc = download_source(pkg,
                                       dirs=dirs,
-                                      unauth=options.allow_unauthenticated)
+                                      unauth=options.allow_unauthenticated,
+                                      no_default_keyrings=options.no_default_keyrings,
+                                      keyrings=options.keyring)
             else:
                 dsc = pkg
 

@@ -166,6 +166,9 @@ class GbpOptionParser(OptionParser):
                  'drop': 'False',
                  'commit': 'False',
                  'upstream-vcs-tag': '',
+
+                 'no-default-keyrings': 'False',
+                 'keyring': [],
              }
     help = {
              'debian-branch':
@@ -324,6 +327,11 @@ class GbpOptionParser(OptionParser):
                    "after export. Default is '%(drop)s'"),
               'commit':
                   "commit changes after export, Default is '%(commit)s'",
+
+              'no-default-keyrings':
+                 "If true, ignore the default keyrings while verifying packages during import.",
+              'keyring':
+                 "One or more keyrings to use while verifying packages during import.",
            }
 
     def_config_files = [ '/etc/git-buildpackage/gbp.conf',
