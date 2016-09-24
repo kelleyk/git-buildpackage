@@ -111,6 +111,7 @@ def prepare_upstream_tarball(repo, cp, options, tarball_dir, output_dir):
         
         if not pristine_tar_build_orig(repo, cp, output_dir, options):
             # We weren't able to get a tarball from pristine-tar.
+            gbp.log.debug('pristine-tar was unable to provide an orig tarball.')
 
             # @KK: This function now does a bunch of nice checking for snapshot builds (e.g. that
             # the version number is appropriate, that the commit it references is on the
@@ -262,7 +263,7 @@ def pristine_tar_build_orig(repo, cp, output_dir, options):
     @return: True: orig tarball build, False: noop
 
     """
-
+    
     if options.pristine_tar:
         
         # @KK: has_branch() might be better called has_ref(); it checks that 'git show-ref' succeeds.
@@ -292,6 +293,8 @@ def pristine_tar_build_orig(repo, cp, output_dir, options):
             
         return True
 
+    else:
+        gbp.log.debug("pristine-tar is disabled by command-line options")
 
 # @KK: Modified version of gbp/scripts/dch.py:snapshot_version() that does not discard 'commit'.
 def parse_snapshot_version(version):
@@ -643,7 +646,7 @@ def main(argv):
     branch = None
 
     options, gbp_args, dpkg_args = parse_args(argv, prefix)
-
+    
     if not options:
         return 1
 
